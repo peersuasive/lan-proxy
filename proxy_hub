@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+pname=ext
+
+[[ "$1" == -h || "$1" == --help ]] && {
+    echo "Usage: ${0##*/} [-y|-n|-s <int>|-u <user]"
+    echo "    -y|-n   assume YES/NO"
+    echo "    -s      restart dhcp on interface <int>"
+    exit 0
+}
+
+[[ "$1" == -u ]] && user="$2" && shift 2
+: ${user:=$USER}
+((UID)) && exec sudo $0 -u $user "$@"
+[[ "$1" == -y ]] && YES=Y && shift
+[[ "$1" == -n ]] && YES=N && shift
+[[ "$1" == -s ]] && SETIP=1 && shift
+
+[[ "$1" == -k || "$1" == --kill || "$1" == --stop || "$1" == --delete || "$1" == -d ]] && {
+    if intf=$(ip netns exec ext sh -c "ls -1 /sys/class/net/|grep -v lo"); then
+        ip netns exec $pname ip link set $intf netns 1
+        r=$?
+        if pid=$(pgrep -f "dhclient $intf"); then
+            kill $pid
+        else
+            echo "WARNING: failed to find relevant dhclient!"
+        fi
+        !((r)) && [[ "$1" == --delete || "$1" == -d ]] && {
+            ip netns delete $pname
+            r=$?
+        }
+        exit $r
+    fi
+    echo "Failed to reset net-ns or interface for $pname! Aborting."
+    exit 1
+}
+
+set_ip() {
+    local int=${int:-$1}
+    [[ -z "$int" ]] && echo "Missing interface!" && return 1
+    local running
+    if running=$(pgrep -f "dhclient.*${int}$"); then
+        kill -5 $running
+    fi
+    # Use dhcp to get an ipv4 address for $int
+    ip netns exec $pname dhclient $int
+}
+
+((SETIP)) && { set_ip $1; exit $?; }
+
+ints=( "eth1" "enp0s6u1" "enp0s12u1" $@ )
+for int in ${ints[@]}; do
+    /sbin/ifconfig -a |grep -q "^$int " && break
+    int=
+done
+[[ -z "$int" ]] && echo "Can't find any available interface in ${ints[@]}..." && exit 1
+
+# Add a new namespace called $pname
+if ! ip netns list |grep -q $pname; then
+    ip netns add $pname
+fi
+
+# Set $pname to use $int, after this point $int is not usable by programs
+# outside the namespace
+ip link set $int netns $pname
+
+# Bring up $int inside $pname
+ip netns exec $pname ip link set $int up
+
+set_ip
+
+
+[[ -z "$YES" ]] && read -p "Launch terminal ? (y/N) " YES
+! [[ "${YES:-N}" =~ [Yy] ]] && exit 0
+ip netns exec $pname sudo -u $user "xterm"&
+
+
+## in case of trouble with DNS, see if this might help
+## @see https://stackoverflow.com/questions/45629002/how-does-ip-netns-exec-command-create-mount-namespace
