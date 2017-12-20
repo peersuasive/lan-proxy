@@ -10,6 +10,7 @@ _help() {
 
 
 ## some predefined commands
+default=xterm
 ping="fping -q -c1 8.8.8.8 2>/dev/null && echo OK || echo KO"
 ##
 
@@ -49,4 +50,4 @@ err() {
 . `which proxy_lan` || exit 1
 
 [[ -n "$cmd" ]] && set -- ""
-exec ip netns exec $pname sudo -u $user sh -c "${cmd:-$@}"
+exec ip netns exec $pname sudo -u $user sh -c "${cmd:-${@:-$default}}"
