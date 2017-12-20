@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+pname=ext
+((UID)) && exec sudo "$0" -u $USER "$@"
+
+_help() {
+    echo "Usage: ${0##*/}"
+    echo "  -p|--ping   quick connection check "
+    exit 0
+}
+
+
+## some predefined commands
+ping="fping -q -c1 8.8.8.8 2>/dev/null && echo OK || echo KO"
+##
+
+user=
+release= delete=
+debug=
+EOO=0
+ARGS=
+while (($#)); do
+    case "$1" in
+        -h|--help) _help; exit 0;;
+        -u|--user) user=$2; shift;;
+        -p|--ping) cmd="$ping";;
+        --debug) debug=1;
+            [[ "$2" =~ ^[0-9]+$ ]] && debug=$2 && shift
+            ;;
+        --) ;&
+        *) ARGS="$@"
+           shift $(($#-1))
+           break;;
+    esac
+    shift
+done
+set -- "$ARGS"
+ARGS=
+#########
+
+((debug>1)) && set -x
+
+err() {
+    [[ -n "$1" ]] && echo "ERROR: $@" >&2 || echo "ERROR." >&2
+    caller
+    exit 1
+}
+
+## set proxy up
+. `which proxy_lan` || exit 1
+
+[[ -n "$cmd" ]] && set -- ""
+exec ip netns exec $pname sudo -u $user sh -c "${cmd:-$@}"

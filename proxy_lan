@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+pname=${pname:-ext}
+((UID)) && exec sudo "$0" -u $USER "$@"
+
+_help() {
+    echo "Usage: ${0##*/} [-s|-d]"
+    echo "  -s|--stop|-k|--kill     release network interface from netspace"
+    echo "  -D|--delete             like kill and delete net-ns"
+#    echo "  -d|--docker             use docker to isolate processes"
+    exit 0
+}
+user=${user}
+release= delete=
+debug=
+ARGS=
+while (($#)); do
+    case "$1" in
+        -h|--help) _help; exit 0;;
+        -u|--user) user=$2; shift;;
+        -D|--delete) delete=1 ;&
+        -s|--stop|-r|--release|-k|--kill) release=1;;
+        --debug) debug=1;
+            [[ "$2" =~ ^[0-9]+$ ]] && debug=$2 && shift
+            ;;
+        --) ;&
+        *) ARGS="$@"
+           shift $(($#-1))
+           break;;
+    esac
+    shift
+done
+set -- "$ARGS"
+#########
+
+((debug>1)) && set -x
+
+((debug)) && {
+    _dbg() { echo "DEBUG: $@" >&2; }
+} || { _dbg() {
+    :
+}; }
+err() {
+    [[ -n "$1" ]] && echo "ERROR: $@" >&2 || echo "ERROR." >&2
+    caller
+    exit 1
+}
+
+## just release interface
+((release)) && {
+    ! ip netns list |grep -q $pname && exit 0
+    ip netns exec $pname ip -o link show dev $pname 1>/dev/null 2>/dev/null && {
+        ip netns exec $pname ip link set $pname down 2>/dev/null
+        ip netns exec $pname ip link set $pname netns 1
+    }
+    ((delete)) && {
+        ip netns delete $pname
+        ip link del $pname 2>/dev/null
+    }
+    exit 0
+}
+
+## quick check
+[[ $_ != $0 ]] && ss=1
+ip netns exec $pname ip -o a s dev $pname 2>/dev/null|grep -q -w inet && qc=1
+((qc)) && { ((ss)) && return 0 || exit 0; }
+
+## get tethering interface
+int= range= gw=
+get_tether() {
+    [[ -n "$range" && -n "$int" && -n "$gw" ]] && return 0
+    local rang eth lgw i
+    for i in /sys/class/net/*; do
+        rang= eth= lgw=
+        ! \ls -l $i|grep -q usb && continue
+        eth=$(basename $i)
+        rang=$(ip -o a s dev $eth|grep 'inet '|awk '{print $4}')
+        [[ -z "$rang" ]] && continue
+        local l=/var/lib/dhcp/dhclient.$eth.leases
+        [[ -f "$l" ]] && lgw=$(cat "$l"|grep 'option routers'|tail -n1|awk '{print $3}') || err "Can't find lease for $eth."
+        [[ -z $lgw ]] && continue
+        gw=${lgw%;}
+        break
+    done
+    [[ -z "$rang" || -z "$eth" || -z "$lgw" ]] && return 1
+    range=$rang
+	int=$eth
+    gw=${lgw%;}
+    return 0
+}
+
+## Add a new namespace called $pname
+if ! ip netns list |grep -q $pname; then
+    ip netns add $pname || err
+fi
+
+## create ext vlan if necessary
+! ip netns exec $pname ip -o link show dev $pname 1>/dev/null 2>/dev/null && {
+    ! ip -o link show dev $pname 1>/dev/null 2>/dev/null && {
+        get_tether || err "Can't find any suitable interface for tethering."
+        ip link add $pname link $int type macvlan mode bridge || err
+    }
+    ## attribute vlan with name $pname to namespace with name $pname
+    ip link set $pname netns $pname || err
+}
+
+## set network up
+! ip netns exec $pname ip -o a s dev $pname 2>/dev/null|grep -q -w inet && {
+    get_tether || err "Can't find any suitable interface for tethering."
+    ip netns exec $pname ip link set $pname up || err
+    ip netns exec $pname ip route del default 2>/dev/null
+    ip netns exec $pname ip addr add $range dev $pname || err
+    ip netns exec $pname ip route add default via $gw dev $pname || err
+}
