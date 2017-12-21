@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 pname=${pname:-ext}
 ((UID)) && exec sudo "$0" -u $USER "$@"
+[[ $_ != $0 ]] && sourced=1
 
 _help() {
     echo "Usage: ${0##*/} [-s|-d]"
@@ -19,6 +20,7 @@ while (($#)); do
         -u|--user) user=$2; shift;;
         -D|--delete) delete=1 ;&
         -s|--stop|-r|--release|-k|--kill) release=1;;
+        -d|--docker) docker="$2"; shift;;
         --debug) debug=1;
             [[ "$2" =~ ^[0-9]+$ ]] && debug=$2 && shift
             ;;
@@ -60,9 +62,8 @@ err() {
 }
 
 ## quick check
-[[ $_ != $0 ]] && ss=1
 ip netns exec $pname ip -o a s dev $pname 2>/dev/null|grep -q -w inet && qc=1
-((qc)) && { ((ss)) && return 0 || exit 0; }
+((qc)) && { ((sourced)) && return 0 || exit 0; }
 
 ## get tethering interface
 int= range= gw=
