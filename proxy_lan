@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+set -o pipefail
+
 pname=${pname:-ext}
 ((UID)) && exec sudo "$0" -u $USER "$@"
 [[ $_ != $0 ]] && sourced=1
@@ -70,11 +72,9 @@ int= range= gw=
 get_tether() {
     [[ -n "$range" && -n "$int" && -n "$gw" ]] && return 0
     local rang eth lgw i
-    for i in /sys/class/net/*; do
-        rang= eth= lgw=
-        ! \ls -l $i|grep -q usb && continue
-        eth=$(basename $i)
-        rang=$(ip -o a s dev $eth|grep 'inet '|awk '{print $4}')
+    for eth in `stat -c "%n:%N" /sys/class/net/*|grep usb|awk -F: '{print $1}'|awk -F/ '{print $NF}'`; do
+        rang= lgw=
+        rang=$(ip -o a s dev $eth|grep ' inet '|grep -v ' secondary '|awk '{print $4}')
         [[ -z "$rang" ]] && continue
         local l=/var/lib/dhcp/dhclient.$eth.leases
         [[ -f "$l" ]] && lgw=$(cat "$l"|grep 'option routers'|tail -n1|awk '{print $3}') || err "Can't find lease for $eth."
